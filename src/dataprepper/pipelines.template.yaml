@@ -6,6 +6,7 @@ otlp-pipeline:
   source:
     otlp:
       ssl: false
+      port: 21892
   route:
     - logs: "getEventType() == \"LOG\""
     - traces: "getEventType() == \"TRACE\""
@@ -19,6 +20,38 @@ otlp-pipeline:
         routes:
           - "traces"
 
+otlp-metrics-pipeline:
+  delay: 10
+  source:
+    otel_metrics_source:
+      ssl: false
+      output_format: "otel"
+      port: 21891
+  sink:
+    - pipeline:
+        name: "otel-metrics-pipeline"
+
+otlp-pipeline2:
+  delay: 10
+  source:
+    otlp:
+      ssl: false
+      output_format: "otel"
+      port: 21893
+  sink:
+    - pipeline:
+        name: "otel-logs-output-format-otel-pipeline"
+
+otel-logs-output-format-otel-pipeline:
+  workers: 5
+  delay: 10
+  source:
+    pipeline:
+      name: "otlp-pipeline2"
+  sink:
+    - file:
+        path: /tmp/logs/otel-logs-otel.json
+
 otel-logs-pipeline:
   workers: 5
   delay: 10
@@ -27,6 +60,11 @@ otel-logs-pipeline:
       name: "otlp-pipeline"
   buffer:
     bounded_blocking:
+  processor:
+    - copy_values:
+        entries:
+          - from_key: "time"
+            to_key: "@timestamp"
   sink:
     - opensearch:
         hosts: OPENSEARCH_HOSTS
@@ -34,6 +72,8 @@ otel-logs-pipeline:
         password: OPENSEARCH_PASSWORD
         insecure: true
         index_type: log-analytics-plain
+    - file:
+        path: /tmp/logs/otel-logs.json
 
 otel-traces-pipeline:
   delay: "100"
@@ -45,6 +85,28 @@ otel-traces-pipeline:
         name: "traces-raw-pipeline"
     - pipeline:
         name: "service-map-pipeline"
+
+otel-metrics-pipeline:
+  workers: 5
+  delay: 10
+  source:
+    pipeline:
+      name: "otlp-metrics-pipeline"
+  processor:
+    - otel_metrics:
+        calculate_histogram_buckets: true
+        calculate_exponential_histogram_buckets: true
+        exponential_histogram_max_allowed_scale: 10
+        flatten_attributes: false
+  sink:
+    - opensearch:
+        hosts: OPENSEARCH_HOSTS
+        username: OPENSEARCH_USER
+        password: OPENSEARCH_PASSWORD
+        insecure: true
+        index_type: metric-analytics-plain
+    - file:
+        path: /tmp/logs/otel-metrics.json
 
 traces-raw-pipeline:
   source:

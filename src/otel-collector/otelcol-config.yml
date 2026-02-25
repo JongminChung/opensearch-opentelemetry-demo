@@ -135,6 +135,16 @@ exporters:
     tls:
       insecure: true
   otlp/opensearch:
+    endpoint: "data-prepper:21892"
+    tls:
+      insecure: true
+      insecure_skip_verify: true
+  otlp/opensearch-metrics:
+    endpoint: "data-prepper:21891"
+    tls:
+      insecure: true
+      insecure_skip_verify: true
+  otlp/opensearch-otel:
     endpoint: "data-prepper:21893"
     tls:
       insecure: true
@@ -190,11 +200,11 @@ service:
     metrics:
       receivers: [docker_stats, httpcheck/frontend-proxy, hostmetrics, nginx, otlp, postgresql, redis, spanmetrics]
       processors: [resourcedetection, memory_limiter]
-      exporters: [otlphttp/prometheus, debug]
+      exporters: [otlphttp/prometheus, otlp/opensearch-metrics, debug]
     logs:
       receivers: [otlp]
       processors: [resourcedetection, memory_limiter, transform]
-      exporters: [otlp/opensearch, debug]
+      exporters: [otlp/opensearch, otlp/opensearch-otel, debug]
   telemetry:
     metrics:
       readers:
