@@ -1,14 +1,20 @@
-# Copyright OpenSearch Contributors
-# SPDX-License-Identifier: Apache-2.0
+## dashboards-observability 호환성 제약
+## - Trace Analytics(Data Prepper mode):
+##   span index = otel-v1-apm-span-* (time field: startTime)
+##   service-map index = otel-v1-apm-service-map*
+## - Trace -> Logs correlation 기본값:
+##   indices = ss4o_logs-* / field mapping = serviceName, spanId, traceId, timestamp->time
+## - Metrics Analytics(OpenSearch metrics):
+##   index pattern = ss4o_metrics-*-* / 주요 필드 = kind, name, time, buckets.max, buckets.count
 
 otlp-pipeline:
-  delay: 10
   source:
     otlp:
       ssl: false
   route:
     - logs: "getEventType() == \"LOG\""
     - traces: "getEventType() == \"TRACE\""
+    - metrics: "getEventType() == \"METRIC\""
   sink:
     - pipeline:
         name: "otel-logs-pipeline"
@@ -18,15 +24,22 @@ otlp-pipeline:
         name: "otel-traces-pipeline"
         routes:
           - "traces"
+    - pipeline:
+        name: "otel-metrics-pipeline"
+        routes:
+          - "metrics"
 
 otel-logs-pipeline:
-  workers: 5
-  delay: 10
   source:
     pipeline:
       name: "otlp-pipeline"
-  buffer:
-    bounded_blocking:
+  processor:
+    - copy_values:
+        entries:
+          - from_key: "time"
+            to_key: "@timestamp"
+          # correlation 기본 매핑은 timestamp->time 이므로 time 필드는 유지하고
+          # 탐색/시각화 호환을 위해 @timestamp를 추가로 복사
   sink:
     - opensearch:
         hosts: OPENSEARCH_HOSTS
@@ -34,6 +47,10 @@ otel-logs-pipeline:
         password: OPENSEARCH_PASSWORD
         insecure: true
         index_type: log-analytics-plain
+        # log-analytics-plain => logs-otel-v1-* 계열
+        # dashboards-observability의 Trace->Logs 기본 correlated index는 ss4o_logs-* 이므로
+        # log-analytics-plain -> logs-otel-v1 형식으로 인덱스를 생성
+#    - stdout:
 
 otel-traces-pipeline:
   delay: "100"
@@ -51,7 +68,13 @@ traces-raw-pipeline:
     pipeline:
       name: "otel-traces-pipeline"
   processor:
-    - otel_trace_raw:
+    # https://github.com/opensearch-project/data-prepper/tree/main/data-prepper-plugins/otel-trace-raw-processor#otel-trace-raw-processor
+    - otel_traces:
+    # otel_trace 가 span 문서의 핵심 필드(startTime/endTime/durationInNanos/traceGroup 등)를 채워
+    # Trace Analytics 쿼리/필터의 기반을 만듦
+    # otel_trace_group: 동작하지 않음. index 충돌
+    # [traces-raw-pipeline-sink-worker-10-thread-1] WARN  org.opensearch.dataprepper.plugins.sink.opensearch.BulkRetryStrategy - index = ss4o_traces-otel-2026.03.04, operation = Index, status = 400, error = Could not dynamically add mapping for field [rpc.system.name]. Existing mapping for [attributes.rpc.system] must be of type object but found [text].
+    # - https://github.com/opensearch-project/data-prepper/tree/main/data-prepper-plugins/otel-trace-group-processor
   sink:
     - opensearch:
         hosts: OPENSEARCH_HOSTS
@@ -59,18 +82,58 @@ traces-raw-pipeline:
         password: OPENSEARCH_PASSWORD
         insecure: true
         index_type: trace-analytics-plain-raw
+        # trace-analytics-raw => otel-v1-apm-span-* (alias: otel-v1-apm-span)
+        # dashboards-observability Trace Analytics 기본 span index 패턴과 정합
+#    - stdout:
 
 service-map-pipeline:
-  delay: "100"
   source:
     pipeline:
       name: "otel-traces-pipeline"
   processor:
-    - service_map_stateful:
+    # https://github.com/opensearch-project/data-prepper/tree/main/data-prepper-plugins/service-map-stateful#service-map-stateful-processor
+    - service_map:
   sink:
     - opensearch:
         hosts: OPENSEARCH_HOSTS
         username: OPENSEARCH_USER
         password: OPENSEARCH_PASSWORD
         insecure: true
+        # https://github.com/opensearch-project/data-prepper/blob/main/data-prepper-plugins/opensearch/README.md#service-map-trace-analytics
         index_type: trace-analytics-service-map
+#    - stdout:
+
+otel-metrics-pipeline:
+  source:
+    pipeline:
+      name: "otlp-pipeline"
+  processor:
+    - copy_values:
+        # https://docs.opensearch.org/3.4/observing-your-data/prometheusmetrics/#:~:text=An%20OpenSearch%20cluster%20containing%20an%20OpenTelemetry%20(OTel)%2Dcompatible%20metrics%20index%20with%20OTel%2Dbased%20signals.%20See%20What%20is%20OpenTelemetry%3F%20for%20an%20overview%20of%20OTel.
+        # https://github.com/opensearch-project/opensearch-catalog/blob/main/docs/schema/observability/metrics/metrics.md
+        # 해당 문서를 보면 메트릭 애널리틱스를 하기 위해 ss4o 스키마를 사용함이 필요하다 함 (@timestamp를 사용함)
+        entries:
+          # data-prepper-api$JacksonMetric.class
+          - from_key: "time"
+            to_key: "@timestamp"
+          # data-prepper-api$JacksonSum.class
+          - from_key: "isMonotonic"
+            to_key: "monotonic"
+          # data-prepper-api$JacksonHistogram.class
+          - from_key: "bucketCounts"
+            to_key: "bucketCount"
+          # data-prepper-api$JacksonHistogram.class
+          - from_key: "explicitBounds"
+            to_key: "explicitBoundsList"
+    - otel_metrics:
+        flatten_attributes: true
+  sink:
+    - opensearch:
+        hosts: OPENSEARCH_HOSTS
+        username: OPENSEARCH_USER
+        password: OPENSEARCH_PASSWORD
+        insecure: true
+        # index template 없으면, name 필드가 keyword 타입이 아닌 text 타입으로 인덱싱되어 있어서 발생하는 오류 발생함
+        index_type: custom
+        template_file: /usr/share/data-prepper/pipelines/metrics_index_template.json
+        index: ss4o_metrics-otel-%{yyyy.MM.dd}        # ss4o_metrics-*-* 패턴은 dashboards-observability Metrics Analytics 기대 패턴과 정합

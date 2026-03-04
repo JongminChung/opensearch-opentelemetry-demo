@@ -998,6 +998,7 @@ services:
       - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD}
     volumes:
       - /data/service-map/
+      - ./src/dataprepper/metrics_index_template.json:/usr/share/data-prepper/pipelines/metrics_index_template.json
       - ./src/dataprepper/pipelines.template.yaml:/tmp/pipelines.template.yaml
       - ./src/dataprepper/data-prepper-config.yaml:/usr/share/data-prepper/config/data-prepper-config.yaml
     command: >
@@ -1010,8 +1011,7 @@ services:
       mv /tmp/pipelines.yaml /usr/share/data-prepper/pipelines/pipelines.yaml &&
       exec /usr/share/data-prepper/bin/data-prepper"
     ports:
-      - ${DP_OTEL_TRACE_SOURCE_PORT}
-      - ${DP_OTEL_LOGS_SOURCE_PORT}
+      - 21893:21893
     logging: *logging
     depends_on:
       opensearch:

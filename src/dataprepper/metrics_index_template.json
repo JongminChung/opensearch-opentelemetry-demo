@@ -1,0 +1,26 @@
+{
+  "index_patterns": ["ss4o_metrics-otel-*"],
+  "order": 1,
+  "settings": {
+    "index.mapping.total_fields.limit": 2000
+  },
+  "mappings": {
+    "properties": {
+      "name": { "type": "keyword" },
+      "kind": { "type": "keyword" },
+      "serviceName": { "type": "keyword" },
+      "unit": { "type": "keyword" },
+      "time": { "type": "date" },
+      "@timestamp": { "type": "date" },
+      "value": { "type": "double" },
+      "buckets": {
+        "type": "nested",
+        "properties": {
+          "min": { "type": "double" },
+          "max": { "type": "double" },
+          "count": { "type": "long" }
+        }
+      }
+    }
+  }
+}
